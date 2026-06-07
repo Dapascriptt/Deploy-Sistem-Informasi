@@ -37,13 +37,18 @@ GitHub Actions berjalan otomatis (3 tahapan)
       • Kirim ke server via HTTPS
       • Ekstrak file ke /www/wwwroot/hosting/<repo>
       • Buat user SSH khusus untuk mahasiswa
-      • Setup database, .env, Nginx, Systemd service
+      • Setup Nginx, Systemd service
       • Daftarkan subdomain di Cloudflare
         │
         ▼
   [3] Notification
       • Tampilkan domain, kredensial SSH, dan panduan
         di Job Summary GitHub Actions
+        │
+        ▼
+Mahasiswa membaca Job Summary → login SSH → setup Laravel
+  • Database & .env dibuat otomatis oleh sistem
+  • Mahasiswa menjalankan composer install, migrate, restart service
         │
         ▼
 Web mahasiswa live di:
