@@ -115,6 +115,31 @@ Di Job Summary akan tersedia:
 > Selalu baca Job Summary setelah deploy — semua panduan ada di sana, disesuaikan otomatis dengan repo mahasiswa.
 
 ---
+### Langkah 3 — Push ke GitHub
+
+```bash
+git add .
+git commit -m "first deploy"
+git push origin main
+```
+
+---
+
+## Cara Deploy Pertama Kali
+
+1. Push kode ke GitHub (langkah di atas).
+2. Buka **GitHub → tab Actions → workflow terbaru**.
+3. Tunggu hingga semua job selesai (centang hijau).
+4. Klik job **Package and Deploy** → lihat **Job Summary**.
+
+Di Job Summary akan tersedia:
+- Domain web
+- Username & password SSH
+- Semua langkah selanjutnya
+
+> Selalu baca Job Summary setelah deploy — semua panduan ada di sana, disesuaikan otomatis dengan repo mahasiswa.
+
+---
 
 ## Langkah 1 — Install cloudflared (sekali saja)
 
