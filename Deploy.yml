@@ -1,0 +1,203 @@
+name: AutoDeploy
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+      - 'LICENSE'
+      - 'README*'
+
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Mode deploy'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - update
+
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    name: Detect and Validate
+    runs-on: ubuntu-latest
+    outputs:
+      app_type: ${{ steps.detect.outputs.app_type }}
+      repo_slug: ${{ steps.slug.outputs.repo_slug }}
+      deploy_mode: ${{ steps.mode.outputs.deploy_mode }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate Repository Slug
+        id: slug
+        run: |
+          SLUG=$(echo "${{ github.event.repository.name }}" \
+            | tr '[:upper:]' '[:lower:]' \
+            | sed 's/[^a-z0-9-]/-/g' \
+            | sed 's/--*/-/g' \
+            | sed 's/^-//;s/-$//')
+          echo "repo_slug=$SLUG" >> "$GITHUB_OUTPUT"
+
+      - name: Detect Framework
+        id: detect
+        run: |
+          if [[ -f "artisan" && -f "composer.json" ]]; then
+            echo "app_type=laravel" >> "$GITHUB_OUTPUT"
+          else
+            echo "app_type=php-native" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set Deploy Mode
+        id: mode
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "deploy_mode=${{ inputs.mode }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy_mode=full" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: PHP Syntax Check
+        run: |
+          find . -name "*.php" ! -path "./vendor/*" -exec php -l {} \; | grep "Errors parsing" && exit 1 || echo "Syntax OK"
+
+  deploy:
+    name: Package and Deploy
+    runs-on: ubuntu-latest
+    needs: detect
+    env:
+      REPO_SLUG: ${{ needs.detect.outputs.repo_slug }}
+      APP_TYPE: ${{ needs.detect.outputs.app_type }}
+      DEPLOY_MODE: ${{ needs.detect.outputs.deploy_mode }}
+      DEPLOY_URL: https://deployv2.akhzafachrozy.my.id
+      GUIDE_URL: https://github.com/Dapascriptt/Deploy-Sistem-Informasi
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create Deployment Package
+        run: |
+          find . \
+            -not -path "./.git/*" \
+            -not -path "./.github/*" \
+            -not -path "./node_modules/*" \
+            -not -path "./vendor/*" \
+            -not -name ".env" \
+            -not -name "deploy.zip" \
+            -not -name "*.log" \
+            | zip deploy.zip -@ -q
+
+          echo "--- Verifikasi dotfiles dalam ZIP ---"
+          unzip -l deploy.zip | grep '^\.' || echo "(tidak ada dotfile di root, mungkin dalam subfolder)"
+          unzip -l deploy.zip | grep -E '\.env\.example|\.htaccess|\.gitignore' || echo "(dotfile spesifik tidak ditemukan — pastikan file ada di repo)"
+
+          echo "zip_size=$(du -sh deploy.zip | cut -f1)" >> "$GITHUB_ENV"
+          echo "ZIP berhasil dibuat: $(du -sh deploy.zip | cut -f1)"
+
+      - name: Send Deployment Package
+        id: request
+        run: |
+          RESPONSE=$(curl -s -X POST \
+            -H "User-Agent: GitHub-Actions-AutoDeploy" \
+            -F "key=autodeploy-classroom" \
+            -F "repo=$REPO_SLUG" \
+            -F "mode=$DEPLOY_MODE" \
+            -F "file=@deploy.zip" \
+            "$DEPLOY_URL")
+
+          echo "RAW_RESPONSE<<EOF" >> "$GITHUB_ENV"
+          echo "$RESPONSE" >> "$GITHUB_ENV"
+          echo "EOF" >> "$GITHUB_ENV"
+
+          if echo "$RESPONSE" | grep -q "AUTODEPLOY_START"; then
+             echo "status=success" >> "$GITHUB_ENV"
+          else
+             echo "status=failed" >> "$GITHUB_ENV"
+             echo "::error::Server returned error: $RESPONSE"
+             exit 1
+          fi
+
+      - name: Parse Deployment Results
+        if: always()
+        run: |
+          echo "P_DOMAIN=$(echo "${{ env.RAW_RESPONSE }}"     | grep '^ADPL:domain='     | cut -d'=' -f2-)" >> "$GITHUB_ENV"
+          echo "P_PORT=$(echo "${{ env.RAW_RESPONSE }}"       | grep '^ADPL:port='       | cut -d'=' -f2-)" >> "$GITHUB_ENV"
+          echo "P_SSH_USER=$(echo "${{ env.RAW_RESPONSE }}"   | grep '^ADPL:ssh_user='   | cut -d'=' -f2-)" >> "$GITHUB_ENV"
+          echo "P_SSH_PASS=$(echo "${{ env.RAW_RESPONSE }}"   | grep '^ADPL:ssh_pass='   | cut -d'=' -f2-)" >> "$GITHUB_ENV"
+          echo "P_SSH_CMD=$(echo "${{ env.RAW_RESPONSE }}"    | grep '^ADPL:ssh_cmd='    | cut -d'=' -f2-)" >> "$GITHUB_ENV"
+          echo "P_SERVICE=$(echo "${{ env.RAW_RESPONSE }}"    | grep '^ADPL:service='    | cut -d'=' -f2-)" >> "$GITHUB_ENV"
+          echo "P_WEB_STATUS=$(echo "${{ env.RAW_RESPONSE }}" | grep '^ADPL:web_status=' | cut -d'=' -f2-)" >> "$GITHUB_ENV"
+          echo "P_FILE_OWNER=$(echo "${{ env.RAW_RESPONSE }}" | grep '^ADPL:file_owner=' | cut -d'=' -f2-)" >> "$GITHUB_ENV"
+          echo "P_SRV_STATUS=$(echo "${{ env.RAW_RESPONSE }}" | grep '^ADPL:srv_status=' | cut -d'=' -f2-)" >> "$GITHUB_ENV"
+
+      - name: Deployment Summary
+        if: always()
+        run: |
+          if [[ "${{ env.status }}" == "success" ]]; then
+            STATUS_LABEL="Berhasil"
+          else
+            STATUS_LABEL="Gagal"
+          fi
+
+          cat >> "$GITHUB_STEP_SUMMARY" << EOF
+          # AutoDeploy — $REPO_SLUG
+
+          | Info | Detail |
+          | :--- | :--- |
+          | **Status Deploy** | $STATUS_LABEL |
+          | **Domain** | [${{ env.P_DOMAIN }}](${{ env.P_DOMAIN }}) |
+          | **App Type** | \`$APP_TYPE\` |
+          | **Web Status** | ${{ env.P_WEB_STATUS }} |
+          | **Service Status** | \`${{ env.P_SRV_STATUS }}\` |
+          | **Port** | \`${{ env.P_PORT }}\` |
+          | **SSH User** | \`${{ env.P_SSH_USER }}\` |
+          | **SSH Password** | \`${{ env.P_SSH_PASS }}\` |
+          | **SSH Command** | \`${{ env.P_SSH_CMD }}\` |
+          | **Service** | \`${{ env.P_SERVICE }}\` |
+          | **File Owner** | \`${{ env.P_FILE_OWNER }}\` |
+          | **ZIP Size** | \`${{ env.zip_size }}\` |
+
+          ## Panduan Setup Lanjutan
+
+          Deployment awal sudah diproses oleh sistem AutoDeploy.
+
+          Untuk akses SSH, konfigurasi Laravel, file \`.env\`, database, migration, storage link, permission, dan restart service, silakan ikuti panduan berikut:
+
+          **Panduan Deployment:** ${{ env.GUIDE_URL }}
+
+          ## Informasi Permission
+
+          > Semua file di-set ke **\`www:www\`** (folder: 775, file: 664).
+          > SSH user **\`${{ env.P_SSH_USER }}\`** sudah ditambahkan ke group **\`www\`** sehingga bisa membaca dan menulis file tanpa \`sudo\`.
+          > File \`.env\` di-set **640** untuk keamanan.
+
+          <details><summary>Lihat Log Server</summary>
+
+          \`\`\`text
+          ${{ env.RAW_RESPONSE }}
+          \`\`\`
+
+          </details>
+          EOF
+
+  notify:
+    name: Notification
+    runs-on: ubuntu-latest
+    needs: [detect, deploy]
+    if: always()
+    steps:
+      - name: Print Final Status
+        run: |
+          echo "Deployment for ${{ needs.detect.outputs.repo_slug }} finished with status: ${{ needs.deploy.result }}"
