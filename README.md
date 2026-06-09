@@ -98,6 +98,7 @@ git commit -m "first deploy"
 git push origin main
 ```
 
+>> ⚠️ Jika workflow tidak terpicu setelah push pertama, lakukan perubahan kecil pada salah satu file project lalu push kembali. Hal ini normal terjadi saat pertama kali mendaftarkan workflow pada repositori baru.
 ---
 
 ## Cara Deploy Pertama Kali
@@ -107,6 +108,8 @@ git push origin main
 3. Tunggu hingga semua job selesai (centang hijau).
 4. Klik job **Package and Deploy** → lihat **Job Summary**.
 
+> ⚠️ Jika tab Actions belum menampilkan workflow run, pastikan file `deploy.yml` sudah berada di `.github/workflows/` dan lakukan push perubahan kecil kembali. Atau gunakan tombol **Run workflow** di tab Actions untuk trigger manual.
+
 Di Job Summary akan tersedia:
 - Domain web
 - Username & password SSH
@@ -114,7 +117,6 @@ Di Job Summary akan tersedia:
 
 > Selalu baca Job Summary setelah deploy — semua panduan ada di sana, disesuaikan otomatis dengan repo mahasiswa.
 
----
 ### Langkah 3 — Push ke GitHub
 
 ```bash
