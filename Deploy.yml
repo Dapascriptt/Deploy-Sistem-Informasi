@@ -1,4 +1,21 @@
-name: AutoDeploy
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  AutoDeploy v2.3 — GitHub Actions Workflow (Nginx + PHP-FPM) ║
+# ║  Target: deployv2.akhzafachrozy.my.id                        ║
+# ╠══════════════════════════════════════════════════════════════╣
+# ║  CHANGELOG v2.2                                              ║
+# ║  [FIX-6] ZIP sekarang include dotfiles (.env.example, dll)   ║
+# ║  [FIX-6] Output summary menampilkan info permission          ║
+# ║  [FIX-7] Exclude .env dari ZIP (dibuat manual via SSH)       ║
+# ║  CHANGELOG v2.3                                              ║
+# ║  [FIX-8] Server pindah arsitektur: Nginx + PHP-FPM langsung, ║
+# ║          tidak ada lagi service systemd / port per-project.  ║
+# ║          Field ADPL:port & ADPL:service dihapus dari parsing ║
+# ║          karena server tidak lagi mengirimkannya.            ║
+# ║  [FIX-8] Instruksi Laravel "restart service" dihapus, diganti║
+# ║          catatan bahwa PHP-FPM otomatis melayani aplikasi.   ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+name: 🚀 AutoDeploy v2
 
 on:
   push:
@@ -7,6 +24,7 @@ on:
       - master
     paths-ignore:
       - '**.md'
+      - '.github/**'
       - 'docs/**'
       - '.gitignore'
       - 'LICENSE'
@@ -28,21 +46,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ──────────────────────────────────────────────────────
+  #  JOB 1: DETECT & VALIDATE
+  # ──────────────────────────────────────────────────────
   detect:
-    name: Detect and Validate
+    name: 🔍 Detect & Validate
     runs-on: ubuntu-latest
     outputs:
-      app_type: ${{ steps.detect.outputs.app_type }}
-      repo_slug: ${{ steps.slug.outputs.repo_slug }}
+      app_type:    ${{ steps.detect.outputs.app_type }}
+      repo_slug:   ${{ steps.slug.outputs.repo_slug }}
       deploy_mode: ${{ steps.mode.outputs.deploy_mode }}
 
     steps:
-      - name: Checkout
+      - name: ⬇️ Checkout
         uses: actions/checkout@v4
 
-      - name: Generate Repository Slug
+      - name: 🏷️ Generate repo slug
         id: slug
         run: |
+          # Mengubah nama repo GitHub menjadi format yang aman untuk linux user/folder
           SLUG=$(echo "${{ github.event.repository.name }}" \
             | tr '[:upper:]' '[:lower:]' \
             | sed 's/[^a-z0-9-]/-/g' \
@@ -50,7 +72,7 @@ jobs:
             | sed 's/^-//;s/-$//')
           echo "repo_slug=$SLUG" >> "$GITHUB_OUTPUT"
 
-      - name: Detect Framework
+      - name: 🔎 Detect framework
         id: detect
         run: |
           if [[ -f "artisan" && -f "composer.json" ]]; then
@@ -59,7 +81,7 @@ jobs:
             echo "app_type=php-native" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Set Deploy Mode
+      - name: 📋 Set deploy mode
         id: mode
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
@@ -68,27 +90,48 @@ jobs:
             echo "deploy_mode=full" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: PHP Syntax Check
+      - name: 🧪 PHP syntax lint
         run: |
-          find . -name "*.php" ! -path "./vendor/*" -exec php -l {} \; | grep "Errors parsing" && exit 1 || echo "Syntax OK"
+          # Cek syntax error sebelum kirim ke server
+          find . -name "*.php" ! -path "./vendor/*" -exec php -l {} \; | grep "Errors parsing" && exit 1 || echo "✅ Syntax OK"
 
+  # ──────────────────────────────────────────────────────
+  #  JOB 2: PACKAGE & DEPLOY
+  # ──────────────────────────────────────────────────────
   deploy:
-    name: Package and Deploy
+    name: 🚀 Package & Deploy
     runs-on: ubuntu-latest
     needs: detect
     env:
-      REPO_SLUG: ${{ needs.detect.outputs.repo_slug }}
-      APP_TYPE: ${{ needs.detect.outputs.app_type }}
+      REPO_SLUG:   ${{ needs.detect.outputs.repo_slug }}
+      APP_TYPE:    ${{ needs.detect.outputs.app_type }}
       DEPLOY_MODE: ${{ needs.detect.outputs.deploy_mode }}
-      DEPLOY_URL: https://deployv2.akhzafachrozy.my.id
-      GUIDE_URL: https://github.com/Dapascriptt/Deploy-Sistem-Informasi
+      DEPLOY_URL:  https://deployv2.akhzafachrozy.my.id
 
     steps:
-      - name: Checkout
+      - name: ⬇️ Checkout
         uses: actions/checkout@v4
 
-      - name: Create Deployment Package
+      # ──────────────────────────────────────────────
+      # [FIX-7] Buat ZIP dengan dotfiles tersertakan.
+      #
+      # Catatan penting:
+      #   • .env.example  → DISERTAKAN dalam ZIP agar mahasiswa punya template
+      #   • .env          → DIKECUALIKAN dari ZIP (berisi secret, dibuat manual via SSH)
+      #   • .htaccess     → DISERTAKAN (dotfile yang dibutuhkan web server)
+      #   • vendor/       → DIKECUALIKAN (berat, diinstall via composer di server)
+      #   • node_modules/ → DIKECUALIKAN (berat, diinstall via npm di server)
+      #   • storage/*.log → DIKECUALIKAN (log runtime, tidak perlu di-deploy)
+      #
+      # Perintah `zip` secara default MELEWATKAN dotfiles di beberapa implementasi.
+      # Solusi: gunakan `find` + `zip` untuk memastikan semua file (termasuk dotfiles)
+      # masuk ke dalam arsip.
+      # ──────────────────────────────────────────────
+      - name: 📦 Create deployment ZIP (with dotfiles)
         run: |
+          # Kumpulkan semua file termasuk dotfiles menggunakan find,
+          # lalu pipe hasilnya ke zip. Ini memastikan .env.example, .htaccess,
+          # dan dotfiles lain tidak terlewat.
           find . \
             -not -path "./.git/*" \
             -not -path "./.github/*" \
@@ -99,18 +142,21 @@ jobs:
             -not -name "*.log" \
             | zip deploy.zip -@ -q
 
+          # Verifikasi dotfiles penting tersertakan dalam ZIP
           echo "--- Verifikasi dotfiles dalam ZIP ---"
           unzip -l deploy.zip | grep '^\.' || echo "(tidak ada dotfile di root, mungkin dalam subfolder)"
           unzip -l deploy.zip | grep -E '\.env\.example|\.htaccess|\.gitignore' || echo "(dotfile spesifik tidak ditemukan — pastikan file ada di repo)"
 
           echo "zip_size=$(du -sh deploy.zip | cut -f1)" >> "$GITHUB_ENV"
-          echo "ZIP berhasil dibuat: $(du -sh deploy.zip | cut -f1)"
+          echo "✅ ZIP berhasil dibuat: $(du -sh deploy.zip | cut -f1)"
 
-      - name: Send Deployment Package
+      - name: 🌐 Send to deploy endpoint
         id: request
         run: |
+          # Kirim file ke AutoDeploy v2.2
+          # Menggunakan key 'autodeploy-classroom' agar mahasiswa tidak perlu setting secret key
           RESPONSE=$(curl -s -X POST \
-            -H "User-Agent: GitHub-Actions-AutoDeploy" \
+            -H "User-Agent: GitHub-Actions-AutoDeploy-v2" \
             -F "key=autodeploy-classroom" \
             -F "repo=$REPO_SLUG" \
             -F "mode=$DEPLOY_MODE" \
@@ -129,71 +175,85 @@ jobs:
              exit 1
           fi
 
-      - name: Parse Deployment Results
+      - name: 📊 Parse ADPL Results
         if: always()
         run: |
-          echo "P_DOMAIN=$(echo "${{ env.RAW_RESPONSE }}"     | grep '^ADPL:domain='     | cut -d'=' -f2-)" >> "$GITHUB_ENV"
-          echo "P_PORT=$(echo "${{ env.RAW_RESPONSE }}"       | grep '^ADPL:port='       | cut -d'=' -f2-)" >> "$GITHUB_ENV"
-          echo "P_SSH_USER=$(echo "${{ env.RAW_RESPONSE }}"   | grep '^ADPL:ssh_user='   | cut -d'=' -f2-)" >> "$GITHUB_ENV"
-          echo "P_SSH_PASS=$(echo "${{ env.RAW_RESPONSE }}"   | grep '^ADPL:ssh_pass='   | cut -d'=' -f2-)" >> "$GITHUB_ENV"
-          echo "P_SSH_CMD=$(echo "${{ env.RAW_RESPONSE }}"    | grep '^ADPL:ssh_cmd='    | cut -d'=' -f2-)" >> "$GITHUB_ENV"
-          echo "P_SERVICE=$(echo "${{ env.RAW_RESPONSE }}"    | grep '^ADPL:service='    | cut -d'=' -f2-)" >> "$GITHUB_ENV"
+          # Parsing data dari prefix ADPL: yang ada di skrip PHP
+          # v2.3: ADPL:port & ADPL:service sudah tidak dikirim server (arsitektur
+          # Nginx + PHP-FPM tidak lagi punya port/service per-project), diganti
+          # ADPL:doc_root, ADPL:php_fpm_socket, ADPL:log_access, ADPL:log_error.
+          echo "P_DOMAIN=$(echo "${{ env.RAW_RESPONSE }}" | grep '^ADPL:domain=' | cut -d'=' -f2-)" >> "$GITHUB_ENV"
+          echo "P_DOC_ROOT=$(echo "${{ env.RAW_RESPONSE }}" | grep '^ADPL:doc_root=' | cut -d'=' -f2-)" >> "$GITHUB_ENV"
+          echo "P_SSH_USER=$(echo "${{ env.RAW_RESPONSE }}" | grep '^ADPL:ssh_user=' | cut -d'=' -f2-)" >> "$GITHUB_ENV"
+          echo "P_SSH_PASS=$(echo "${{ env.RAW_RESPONSE }}" | grep '^ADPL:ssh_pass=' | cut -d'=' -f2-)" >> "$GITHUB_ENV"
+          echo "P_SSH_CMD=$(echo "${{ env.RAW_RESPONSE }}" | grep '^ADPL:ssh_cmd=' | cut -d'=' -f2-)" >> "$GITHUB_ENV"
           echo "P_WEB_STATUS=$(echo "${{ env.RAW_RESPONSE }}" | grep '^ADPL:web_status=' | cut -d'=' -f2-)" >> "$GITHUB_ENV"
           echo "P_FILE_OWNER=$(echo "${{ env.RAW_RESPONSE }}" | grep '^ADPL:file_owner=' | cut -d'=' -f2-)" >> "$GITHUB_ENV"
-          echo "P_SRV_STATUS=$(echo "${{ env.RAW_RESPONSE }}" | grep '^ADPL:srv_status=' | cut -d'=' -f2-)" >> "$GITHUB_ENV"
 
-      - name: Deployment Summary
+      - name: 📝 Job Summary
         if: always()
         run: |
+          # Membuat tampilan dashboard di GitHub Actions
           if [[ "${{ env.status }}" == "success" ]]; then
-            STATUS_LABEL="Berhasil"
+            ICON="✅"; STATUS_LABEL="Berhasil"
           else
-            STATUS_LABEL="Gagal"
+            ICON="❌"; STATUS_LABEL="Gagal"
           fi
 
           cat >> "$GITHUB_STEP_SUMMARY" << EOF
-          # AutoDeploy — $REPO_SLUG
+          # ${ICON} AutoDeploy v2.3 — $REPO_SLUG
 
           | Info | Detail |
           | :--- | :--- |
-          | **Status Deploy** | $STATUS_LABEL |
           | **Domain** | [${{ env.P_DOMAIN }}](${{ env.P_DOMAIN }}) |
           | **App Type** | \`$APP_TYPE\` |
           | **Web Status** | ${{ env.P_WEB_STATUS }} |
-          | **Service Status** | \`${{ env.P_SRV_STATUS }}\` |
-          | **Port** | \`${{ env.P_PORT }}\` |
+          | **Doc Root** | \`${{ env.P_DOC_ROOT }}\` |
           | **SSH User** | \`${{ env.P_SSH_USER }}\` |
-          | **SSH Password** | \`${{ env.P_SSH_PASS }}\` |
-          | **SSH Command** | \`${{ env.P_SSH_CMD }}\` |
-          | **Service** | \`${{ env.P_SERVICE }}\` |
           | **File Owner** | \`${{ env.P_FILE_OWNER }}\` |
           | **ZIP Size** | \`${{ env.zip_size }}\` |
 
-          ## Panduan Setup Lanjutan
+          ## 💻 Akses SSH
+          \`\`\`bash
+          ${{ env.P_SSH_CMD }}
+          # Password: ${{ env.P_SSH_PASS }}
+          \`\`\`
 
-          Deployment awal sudah diproses oleh sistem AutoDeploy.
-
-          Untuk akses SSH, konfigurasi Laravel, file \`.env\`, database, migration, storage link, permission, dan restart service, silakan ikuti panduan berikut:
-
-          **Panduan Deployment:** ${{ env.GUIDE_URL }}
-
-          ## Informasi Permission
-
+          ## 🔐 Informasi Permission (v2.3)
           > Semua file di-set ke **\`www:www\`** (folder: 775, file: 664).
-          > SSH user **\`${{ env.P_SSH_USER }}\`** sudah ditambahkan ke group **\`www\`** sehingga bisa membaca dan menulis file tanpa \`sudo\`.
-          > File \`.env\` di-set **640** untuk keamanan.
+          > SSH user **\`${{ env.P_SSH_USER }}\`** sudah ditambahkan ke group **\`www\`**
+          > sehingga bisa membaca dan menulis file tanpa `sudo`.
+          > File `.env` di-set **640** untuk keamanan (tidak bisa dibaca oleh *other*).
+          > Aplikasi dilayani langsung oleh **Nginx + PHP-FPM** — tidak ada service
+          > khusus yang perlu di-restart setelah deploy.
 
-          <details><summary>Lihat Log Server</summary>
+          $( [[ "$APP_TYPE" == "laravel" ]] && echo "
+          ## 📋 Laravel Next Steps
+          1. SSH ke server dengan perintah di atas.
+          2. \`cd /www/wwwroot/hosting/$REPO_SLUG\`
+          3. \`composer install --no-dev --optimize-autoloader\`
+          4. \`cp .env.example .env && nano .env\` (jika .env belum otomatis terisi)
+          5. \`php artisan key:generate && php artisan migrate --force\`
+          6. \`php artisan storage:link\`
+          7. \`fix-perm\` (alias sudah tersedia via SSH untuk rapikan permission)
+          8. Selesai — **tidak perlu restart service apa pun**. PHP-FPM otomatis
+             melayani aplikasi begitu langkah di atas selesai. Cukup refresh
+             \`${{ env.P_DOMAIN }}\`.
+          " )
+
+          <details><summary>📄 Lihat Log Raw Server</summary>
 
           \`\`\`text
           ${{ env.RAW_RESPONSE }}
           \`\`\`
-
           </details>
           EOF
 
+  # ──────────────────────────────────────────────────────
+  #  JOB 3: NOTIFY (Optional)
+  # ──────────────────────────────────────────────────────
   notify:
-    name: Notification
+    name: 📣 Notification
     runs-on: ubuntu-latest
     needs: [detect, deploy]
     if: always()
